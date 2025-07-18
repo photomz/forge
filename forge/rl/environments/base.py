@@ -1,15 +1,22 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
+
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 from __future__ import annotations
 
 import abc
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Union
 
 
-@dataclass
+@dataclass(kw_only=True)
 class Observation:
     """Base class for environment observations.
 
@@ -17,7 +24,6 @@ class Observation:
     - Should contain all information needed by an agent to make decisions
     - Should be serializable/deserializable
     - Should be immutable (or treated as such)
-
     Args:
         done: Whether the episode/conversation is complete
         reward: Optional reward signal (can be boolean, int, or float)
@@ -30,7 +36,7 @@ class Observation:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class Action:
     """Base class for environment actions.
 
@@ -46,7 +52,7 @@ class Action:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class State:
     """Base class for environment state.
 
@@ -99,7 +105,6 @@ class Environment(abc.ABC):
             Union[Transform, Callable[[Observation], Observation]]
         ] = None,
     ):
-        """Initialize the environment with an optional transform."""
         self.transform = transform
 
     @abc.abstractmethod
