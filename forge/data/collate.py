@@ -3,6 +3,7 @@
 #
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
+
 from typing import Any, Callable
 
 import torch
@@ -13,22 +14,17 @@ def collate_packed(
 ) -> dict[str, Any]:
     """
     Generic collate function for packed samples from an IterablePackedDataset.
-
-    - Stacks tensors from all samples in the batch. Tensors are expected to be packed,
-    i.e. have the same shape.
-    - Non tensors are appended to a list., e.g. [a,b] + [c] = [[a,b],[c]]
-    - Metrics are extended to a single list, e.g. [a,b] + [c] = [a,b,c].
-    - Delegates attention mask creation to a provided `mask_fn`to generate masks on-the-fly for
-    packed sequences. For an example, check 'create_block_mask' in 'forge.datasets._packed.py'.
-
+    Stacks tensors from all samples in the batch, while keeping non-tensor values
+    as lists. Handles metrics by extending them into a single list. Delegates
+    attention mask creation to a provided `mask_fn` callable that expects
+    `document_ids` and `device` parameters to generate masks on-the-fly for
+    packed sequences.
     Args:
         batch (list[dict[str, Any]]): A list of dictionaries containing samples.
-        mask_fn (Callable): A function that generates attention masks for packed sequences.
+        mask_fn (callable): A function that generates attention masks for packed sequences.
         device (str): The device to use for the tensors.
-
     Returns:
         dict[str, Any]: A dictionary containing the collated samples.
-
     Raises:
         ValueError: If all samples do not have the same keys.
     """
@@ -56,9 +52,9 @@ def collate_packed(
         else:
             collated[key] = [sample[key] for sample in batch]
 
-    # TODO: investigate the need for device here. Device is needed
-    # because mask is created on-the-fly, during forward, given how flex_attention
-    # works.
+    # Delegate mask creation to the provided specialized function
+    # TODO: investigate the need for device here. Currently we hardcode it in utilities to cuda.
+    # shouldnt we just send to device later?
     collated["mask"] = mask_fn(collated["document_ids"], device=device)
 
     return collated

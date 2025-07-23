@@ -637,7 +637,7 @@ class TextPacker(Packer[SampleDict]):
                 if pack["input_pos"]
                 else torch.empty(0, dtype=torch.long)
             ),
-            "metrics": pack["metrics"],
+            # "metrics": pack["metrics"],
         }
 
         # Handle arbitrary keys that aren't tensors - keep as lists
