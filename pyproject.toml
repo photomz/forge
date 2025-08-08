@@ -41,6 +41,8 @@ dev = [
     "pytest-cov",
     "tensorboard",
     "tomli>=1.1.0",
+    "anyio",
+    "pytest-asyncio",
 ]
 
 [project.scripts]
