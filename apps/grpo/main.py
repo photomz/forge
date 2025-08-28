@@ -13,8 +13,8 @@ import torch
 from datasets import load_dataset
 from forge.actors.policy import Policy, PolicyConfig, SamplingOverrides, WorkerConfig
 from forge.actors.replay_buffer import ReplayBuffer
-from forge.controller import ServiceConfig, spawn_service
 from forge.controller.actor import ForgeActor
+from forge.controller.service import ServiceConfig, spawn_service
 from forge.data.rewards import MathReward, ThinkingReward
 from forge.util.metric_logging import get_metric_logger
 from monarch.actor import endpoint
@@ -351,40 +351,33 @@ async def main():
     )
 
     # ---- Setup services ---- #
-    default_service_cfg = ServiceConfig(
-        procs_per_replica=1,
-        num_replicas=1,
-    )
-
     policy = await spawn_service(
-        default_service_cfg,
+        ServiceConfig(procs_per_replica=1, with_gpus=True, num_replicas=1),
         Policy,
         PolicyConfig(
             num_workers=1,
             worker_params=WorkerConfig(model=model),
             sampling_params=SamplingOverrides(num_samples=group_size, max_tokens=16),
-            available_devices="3",
         ),
     )
 
     trainer = await spawn_service(
-        default_service_cfg,
+        ServiceConfig(procs_per_replica=1, with_gpus=True, num_replicas=1),
         Trainer,
         learning_rate=1e-5,
         beta=0.1,
         model_name=model,
-        device=torch.device("cuda:1"),
     )
 
     replay_buffer = await spawn_service(
-        default_service_cfg,
+        ServiceConfig(procs_per_replica=1, num_replicas=1),
         ReplayBuffer,
         batch_size=4,
         max_policy_age=1,
     )
 
     dataloader = await spawn_service(
-        default_service_cfg,
+        ServiceConfig(procs_per_replica=1, num_replicas=1),
         DatasetActor,
         "openai/gsm8k",
         "main",
@@ -393,21 +386,20 @@ async def main():
     )
 
     compute_advantages = await spawn_service(
-        default_service_cfg,
+        ServiceConfig(procs_per_replica=1, num_replicas=1),
         ComputeAdvantages,
         gamma=0.99,
         lambda_=0.95,
     )
 
     ref_model = await spawn_service(
-        default_service_cfg,
+        ServiceConfig(procs_per_replica=1, num_replicas=1, with_gpus=True),
         RefModel,
         model_name=model,
-        device=torch.device("cuda:2"),
     )
 
     reward_actor = await spawn_service(
-        default_service_cfg,
+        ServiceConfig(procs_per_replica=1, num_replicas=1),
         RewardActor,
         reward_functions=[MathReward(), ThinkingReward()],
     )
