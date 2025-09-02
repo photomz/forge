@@ -122,6 +122,9 @@ main() {
     check_sudo
     check_wheels
 
+    # Install openssl as we overwrite the default version when we update LD_LIBRARY_PATH
+    conda install -y openssl
+
     install_system_packages
     download_vllm_wheel
 
