@@ -8,12 +8,18 @@
 import logging
 import math
 import os
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from typing import Callable
 
+import torch
+import torchstore as ts
+
 from monarch.actor import current_rank, current_size, endpoint
 from torch import Tensor
+from torch.distributed.checkpoint._nested_dict import flatten_state_dict
+from torchstore.state_dict_utils import DELIM
 from torchtitan.config.job_config import (
     ActivationCheckpoint,
     Checkpoint,
@@ -26,7 +32,6 @@ from torchtitan.config.job_config import (
     Parallelism,
     Training,
 )
-
 from torchtitan.distributed import utils as dist_utils
 from torchtitan.experiments.forge.engine import ForgeEngine
 from torchtitan.experiments.forge.job_config import ForgeJobConfig
@@ -53,6 +58,7 @@ class RLTrainer(ForgeActor):
     float8: Float8 = field(default_factory=Float8)
     comm: Comm = field(default_factory=Comm)
     loss: Callable = lambda logits, **targets: logits
+    state_dict_key: str = "model_state_dict"
 
     def __post_init__(self):
         """Initializes config types and env variables.
@@ -71,7 +77,7 @@ class RLTrainer(ForgeActor):
                     f"{f.name} should be a {f.type} type or a dict like object"
                 )
 
-        self.current_step = 0
+        self.current_step = 1  # fragile contract.
         self.num_training_steps = self.training.steps
         self.gradient_accumulation_steps = 1
         self.rank = current_rank().rank
@@ -95,7 +101,8 @@ class RLTrainer(ForgeActor):
     async def setup(self):
         # TODO: update ForgeEngine to not use ForgeJobConfig
         engine_config = {f.name: getattr(self, f.name) for f in fields(self)}
-        engine_config.pop("loss")  # Not part of job config
+        for key in {"loss", "state_dict_key"}:
+            engine_config.pop(key)  # Not part of job config
         self.engine = ForgeEngine(ForgeJobConfig(**engine_config))
         self.engine.checkpointer.load(step=self.current_step)
         self.engine.optimizers.zero_grad()
@@ -197,8 +204,30 @@ class RLTrainer(ForgeActor):
         return {"loss": loss.item()}
 
     @endpoint
-    def push_weights(self) -> None:
-        pass
+    async def push_weights(self, policy_version: int) -> None:
+        # Save to torchstore. Hacking in to the Checkpointer's prepped state-dict for now.
+        # TODO:
+        # 1. Checkpoint invokes state-dict flattening during dcp_save for [MODEL].
+        #    May need to replicate the same in this code path.
+        # 2. Unify CheckpointManager and TorchStore weights save control path.
+        if "model" not in self.engine.checkpointer.states:
+            raise RuntimeError("Model state not found in checkpointer state")
+        sd = self.engine.checkpointer.states["model"].state_dict()
+        flattened_state_dict, _ = flatten_state_dict(sd)
+        if self.engine.checkpointer.sd_adapter is None:
+            raise RuntimeError(
+                "Trying to save checkpoint in HF safetensors format, but sd_adapter is not provided."
+            )
+        hf_state_dict = self.engine.checkpointer.sd_adapter.to_hf(flattened_state_dict)
+        # TODO: Figure out how to gracefully handle which model to-vLLM conversion is needed
+        vllm_ready_hf_sd = _qwen3_hf_to_vllm(sd=hf_state_dict, num_layers=28)
+        key = f"{self.state_dict_key}{DELIM}{policy_version}"
+        start_time = time.time()
+        await ts.put_state_dict(state_dict=vllm_ready_hf_sd, key=key)
+        end_time = time.time()
+        self.logger.debug(
+            f"Pushed weights to {key} in {end_time - start_time:.2f} seconds"
+        )
 
     @endpoint
     async def cleanup(self) -> None:
