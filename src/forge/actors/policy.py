@@ -379,8 +379,11 @@ class Policy(PolicyInterface):
     @endpoint
     async def _get_model_params(self) -> dict[str, torch.Tensor]:
         """Get the current model parameters. Only for testing purposes."""
-        model_params = await self.policy_worker._get_model_params.choose()
-        return model_params
+        val_mesh = await self.policy_worker._get_model_params.call()
+        sharded_state_dicts = {}
+        for idx, val in val_mesh.items():
+            sharded_state_dicts[idx["gpus"]] = val
+        return sharded_state_dicts
 
     @endpoint
     async def get_version(self) -> int:
