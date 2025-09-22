@@ -255,6 +255,13 @@ def _qwen3_hf_to_vllm(sd: dict[str, Tensor], num_layers: int) -> dict[str, Tenso
     """
     load_sd = {}
 
+    def unwrap(t):
+        """Unwrap a DTensor to a Tensor."""
+        return t.full_tensor() if isinstance(t, torch.distributed.tensor.DTensor) else t
+
+    for key in sd.keys():
+        sd[key] = unwrap(sd[key]).cpu()
+
     # Copy over directly mapped keys
     for k in sd:
         if any(
