@@ -248,7 +248,7 @@ class Policy(PolicyInterface):
         # Setup scheduler
         # TODO: Add support for `log_stats`
         kv_cache_configs = await self.policy_worker.setup_kv_cache.call()
-        kv_cache_config = kv_cache_configs._values[0]
+        _, kv_cache_config = next(kv_cache_configs.items())
         self.vllm_config.cache_config.num_gpu_blocks = kv_cache_config.num_blocks
         self.vllm_config.cache_config.num_cpu_blocks = 0
 
@@ -351,15 +351,14 @@ class Policy(PolicyInterface):
     async def run(self):
         # TODO: add support for `iteration_stats`
         # TODO: move postprocessing out of loop to not block
-        parallel_config = self.vllm_config.parallel_config
-        output_rank = parallel_config.world_size - parallel_config.tensor_parallel_size
         self.running = True
         while self.running:
             scheduler_output = self.scheduler.schedule()
             worker_outputs = await self.policy_worker.execute_model.call(
                 scheduler_output
             )
-            worker_output = worker_outputs._values[output_rank]
+            # the results of `execute_model` is gathered on the driver rank (rank 0)
+            _, worker_output = next(worker_outputs.items())
             outputs = self.scheduler.update_from_output(scheduler_output, worker_output)
             outputs = outputs.get(0) or EngineCoreOutputs()
             await asyncio.sleep(0)  # Release control before processing outputs
