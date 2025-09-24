@@ -78,29 +78,25 @@ class SessionContext:
 
 
 class ServiceEndpoint(Generic[P, R]):
-    """An endpoint object specific to services.
+    """
+    This extends Monarch's actor APIs for service endpoints.
+    - `route(*args, **kwargs)`: Routes the request to a single replica.
+    - `fanout(*args, **kwargs)`: Broadcasts the request to all healthy replicas.
 
-    This loosely mimics the Endpoint APIs exposed in Monarch, with
-    a few key differences:
-    - Only choose and call are retained (dropping stream and call_one)
-    - Call returns a list directly rather than a ValueMesh.
-
-    These changes are made with Forge use cases in mind, but can
-    certainly be expanded/adapted in the future.
-
+    Monarch's native actor APIs do not apply for services.
     """
 
     def __init__(self, service, endpoint_name: str):
         self.service = service
         self.endpoint_name = endpoint_name
 
-    async def choose(self, *args: P.args, **kwargs: P.kwargs) -> R:
+    async def route(self, *args: P.args, **kwargs: P.kwargs) -> R:
         """Chooses a replica to call based on context and load balancing strategy."""
         # Extract sess_id from kwargs if present
         sess_id = kwargs.pop("sess_id", None)
         return await self.service._call(sess_id, self.endpoint_name, *args, **kwargs)
 
-    async def call(self, *args: P.args, **kwargs: P.kwargs) -> List[R]:
+    async def fanout(self, *args: P.args, **kwargs: P.kwargs) -> List[R]:
         """Broadcasts a request to all healthy replicas and returns the results as a list."""
         result = await self.service.call_all(self.endpoint_name, *args, **kwargs)
         return result
