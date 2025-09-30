@@ -120,7 +120,7 @@ class ForgeActor(Actor):
         }
         cfg = ServiceConfig(**cfg_kwargs)
 
-        logger.info("Spawning Service Actor for %s", cls.__name__)
+        logger.info("Spawning Service for %s", cls.__name__)
         service = Service(cfg, cls, actor_args, actor_kwargs)
         await service.__initialize__()
         return ServiceInterface(service, cls)
