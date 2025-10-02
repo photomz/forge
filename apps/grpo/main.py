@@ -32,7 +32,7 @@ from forge.data.rewards import MathReward, ThinkingReward
 from forge.observability.metric_actors import get_or_create_metric_logger
 from forge.observability.metrics import record_metric, Reduce
 from forge.observability.perf_tracker import Tracer
-from forge.util.ops import selective_log_softmax
+from forge.util.ops import compute_logprobs
 from monarch.actor import endpoint
 from omegaconf import DictConfig
 from vllm.transformers_utils.tokenizer import get_tokenizer
@@ -137,16 +137,6 @@ def collate(batches: list[list[Episode]]):
     return inputs, targets
 
 
-def compute_logprobs(
-    logits: torch.Tensor, input_ids: torch.Tensor, temperature: float = 1.0
-) -> torch.Tensor:
-    context_length = logits.shape[1] - input_ids.shape[1]
-    logits = logits[:, context_length - 1 : -1].to(input_ids.device)
-    scaled_logits = logits / temperature
-    logprobs = selective_log_softmax(scaled_logits, input_ids)
-    return logprobs
-
-
 def simple_grpo_loss(
     logits: torch.Tensor,
     response: torch.Tensor,
@@ -155,7 +145,12 @@ def simple_grpo_loss(
     padding_mask: torch.Tensor,
     beta: float = 0.1,
 ) -> torch.Tensor:
-    logprobs = compute_logprobs(logits, response)
+    """
+    Example GRPO Loss Function for RLTrainer
+    """
+    logprobs: torch.Tensor = compute_logprobs(logits, response)
+
+    # Note: This is also available in losses.grpo_loss via `SimpleGRPOLoss`
     kl = torch.exp(ref_logprobs - logprobs) - (ref_logprobs - logprobs) - 1
     per_token_policy_loss = torch.exp(logprobs - logprobs.detach()) * advantages
     per_token_loss = -(per_token_policy_loss - beta * kl)
