@@ -401,14 +401,14 @@ async def main(cfg: DictConfig):
 
             t.step("reward_evaluation")
 
-            # Calculate reference logprobs
-            ref_logits = await ref_model.forward.route(input_ids)
-            t.step("reference_model_forward")
+            ref_logprobs = await ref_model.forward.route(
+                input_ids, max_req_tokens, return_logprobs=True
+            )
+            t.step("reference_model_calculate_logprobs")
 
-            ref_logprobs = compute_logprobs(ref_logits, input_ids[:, max_req_tokens:])
             for i, episode in enumerate(group.episodes):
                 episode.ref_logprobs = ref_logprobs[i]
-            del ref_logits, ref_logprobs, input_ids
+            del ref_logprobs, input_ids
             t.step("compute_logprobs")
 
             # Calculate advantages and add to replay buffer
