@@ -12,7 +12,7 @@ import os
 import sys
 from collections.abc import Mapping
 from copy import copy
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 
 import torch
 import torch.distributed.checkpoint as dcp
@@ -26,7 +26,7 @@ from vllm.entrypoints.utils import _validate_truncation_size
 from vllm.executor.multiproc_worker_utils import set_multiprocessing_worker_envs
 from vllm.lora.request import LoRARequest
 from vllm.outputs import CompletionOutput, RequestOutput
-from vllm.sampling_params import GuidedDecodingParams, RequestOutputKind, SamplingParams
+from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.transformers_utils.tokenizer_group import init_tokenizer_from_configs
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import get_distributed_init_method
@@ -63,49 +63,6 @@ logger.setLevel(logging.INFO)
 
 
 @dataclass
-class SamplingConfig:
-    """
-    Overrides for vLLMs sampling params.
-
-    Note: We'll want to tie this closer to or directly use vllm's
-            SamplingParams. It is currently used to track a supported
-            subset
-
-    Args:
-        n: Number of samples to generate.
-        guided_decoding: Whether to use guided decoding.
-        max_tokens: Maximum number of tokens to generate.
-    """
-
-    n: int = 1
-    guided_decoding: bool = False
-    max_tokens: int = 512
-    temperature: float = 1.0
-    top_p: float = 1.0
-    logprobs: int = 1
-
-    def __post_init__(self):
-        super().__init__()
-        gd_params = None
-        if self.guided_decoding:
-            gd_params = GuidedDecodingParams(choice=["Positive", "Negative"])
-        self.guided_decoding = gd_params
-
-    @classmethod
-    def from_dict(cls, d: Mapping):
-        d = dict(d)
-        all_fields = set(cls.__dataclass_fields__.keys())
-        valid_args = {k: v for k, v in d.items() if k in all_fields}
-        return cls(**valid_args)
-
-    def asdict(self):
-        # Use the full object instead of a Dict
-        ret = asdict(self)
-        ret["guided_decoding"] = self.guided_decoding
-        return ret
-
-
-@dataclass
 class EngineConfig(EngineArgs):
     """
     EngineConfig extends EngineArgs with worker-specific fields.
@@ -138,11 +95,10 @@ class EngineConfig(EngineArgs):
 @dataclass
 class Policy(PolicyInterface):
     engine_config: EngineConfig | Mapping = field(default_factory=EngineConfig)
-    sampling_config: SamplingConfig | Mapping = field(default_factory=SamplingConfig)
+    sampling_params: SamplingParams | Mapping = field(default_factory=SamplingParams)
     available_devices: str | None = None
     use_dcp: bool = True
     # Gets set up by setup
-    sampling_params: SamplingParams | None = None
     lora_request: LoRARequest | None = None
     tokenization_kwargs: dict = field(default_factory=dict)
     policy_worker: "PolicyWorker" = None
@@ -154,18 +110,20 @@ class Policy(PolicyInterface):
         self._policy_proc: ProcMesh | None = None
         self._worker_procs: ProcMesh | None = None
         self.running = False
+
         if isinstance(self.engine_config, Mapping):
             self.engine_config = EngineConfig.from_dict(self.engine_config)
-        if isinstance(self.sampling_config, Mapping):
-            self.sampling_config = SamplingConfig.from_dict(self.sampling_config)
-        # No conversion needed for boolean flag
+
+        if isinstance(self.sampling_params, Mapping):
+            self.sampling_params = SamplingParams.from_optional(**self.sampling_params)
+            self.sampling_params.output_kind = RequestOutputKind.FINAL_ONLY
 
     @classmethod
     async def launch(  # pyright: ignore[reportIncompatibleMethodOverride]
         cls: type["Policy"],
         *,
         engine_config: EngineConfig | Mapping = EngineConfig(),
-        sampling_config: SamplingConfig | Mapping = SamplingConfig(),
+        sampling_params: SamplingParams | Mapping = SamplingParams(),
         available_devices: str | None = None,
         use_dcp: bool = True,
         **kwargs,
@@ -200,8 +158,10 @@ class Policy(PolicyInterface):
             "vllm_worker", PolicyWorker, vllm_config=vllm_config, use_dcp=use_dcp
         )
 
-        if isinstance(sampling_config, Mapping):
-            sampling_config = SamplingConfig(**sampling_config)
+        if isinstance(sampling_params, Mapping):
+            sampling_params = SamplingParams.from_optional(**sampling_params)
+            sampling_params.output_kind = RequestOutputKind.FINAL_ONLY
+            logger.debug(f"Resolved sampling params: {sampling_params}")
 
         # TODO - expand support so name can stick within kwargs
         actor_name = kwargs.pop("name", cls.__name__)
@@ -209,7 +169,7 @@ class Policy(PolicyInterface):
             actor_name,
             cls,
             engine_config=engine_config,
-            sampling_config=sampling_config,
+            sampling_params=sampling_params,
             available_devices=available_devices,
             policy_worker=workers,
             **kwargs,
@@ -255,11 +215,6 @@ class Policy(PolicyInterface):
         self.update_lock = asyncio.Condition()
 
         self.vllm_config: VllmConfig = self.engine_config.create_vllm_config()
-
-        # Setup sampling params
-        self.sampling_params = get_default_sampling_params(
-            self.vllm_config, overrides=self.sampling_config.asdict()
-        )
 
         # Setup processors
         # TODO: move all processing to the Environment
@@ -736,16 +691,3 @@ def convert_input(prompt=None, prompt_token_ids=None) -> dict:
     if prompt is not None:
         return {"prompt": prompt}
     return {"prompt_token_ids": prompt_token_ids}
-
-
-def get_default_sampling_params(vllm_config, overrides=None) -> SamplingParams:
-    default_params = vllm_config.model_config.get_diff_sampling_param()
-    if overrides is not None:
-        default_params |= overrides
-    if default_params:
-        params = SamplingParams.from_optional(**default_params)
-    else:
-        params = SamplingParams()
-    # We only care about the final output
-    params.output_kind = RequestOutputKind.FINAL_ONLY
-    return params
