@@ -53,6 +53,7 @@ from forge.controller import ForgeActor, get_proc_mesh, stop_proc_mesh
 from forge.data.sharding import VLLMSharding
 from forge.data_models.completion import Completion
 from forge.data_models.prompt import to_prompt
+from forge.env import TORCHSTORE_USE_RDMA
 from forge.interfaces import Policy as PolicyInterface
 from forge.observability.metrics import record_metric, Reduce
 from forge.observability.perf_tracker import Tracer
@@ -67,7 +68,9 @@ class Policy(PolicyInterface):
     engine_args: EngineArgs | Mapping = field(default_factory=EngineArgs)
     sampling_params: SamplingParams | Mapping = field(default_factory=SamplingParams)
     available_devices: str | None = None
-    use_dcp: bool = True
+    use_dcp: bool = (
+        TORCHSTORE_USE_RDMA.get_value() == 0
+    )  # torchstore currently only accepts 0 or 1
     # Gets set up by setup
     lora_request: LoRARequest | None = None
     tokenization_kwargs: dict = field(default_factory=dict)
