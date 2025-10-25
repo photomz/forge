@@ -36,3 +36,9 @@ def __getattr__(name):
         return SandboxedPythonCoder
     else:
         raise AttributeError(f"module {__name__} has no attribute {name}")
+
+from .quantization import (
+    ForgeQuantizationConfig,
+    quantize_loaded_model,
+    create_quantization_config_from_dict,
+)

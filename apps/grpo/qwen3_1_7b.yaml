@@ -19,6 +19,7 @@ metric_logging:
     project: grpo-training
     group: grpo_exp_${oc.env:USER}
     logging_mode: global_reduce # global_reduce, per_rank_reduce, per_rank_no_reduce
+    mode: offline  # Run wandb in offline mode (no API key needed)
   console:
     logging_mode: global_reduce
 
@@ -34,9 +35,12 @@ dataset:
 policy:
   engine_args:  # https://docs.vllm.ai/en/v0.10.0/api/vllm/engine/arg_utils.html#vllm.engine.arg_utils.EngineArgs
     model: ${model}
-    tensor_parallel_size: 1
+    tensor_parallel_size: 2  # Each replica: 2 GPUs with TP=2 (each GPU = 1/2 weights)
     pipeline_parallel_size: 1
     enforce_eager: false
+    # Set weight quantization method (ensure ${model} points to a matching quantized repo)
+    # Supported values include: awq, gptq, marlin, squeezellm (depends on vLLM version)
+    quantization: awq
   sampling_params:  # https://docs.vllm.ai/en/v0.10.0/api/vllm/sampling_params.html#vllm.sampling_params.SamplingParams
     n: ${group_size}
     max_tokens: ${max_res_tokens}
@@ -57,7 +61,7 @@ trainer:
     warmup_steps: 1
   training:
     local_batch_size: ${local_batch_size}
-    seq_len: ${sum:${max_req_tokens},${max_res_tokens}}  # seq_len >= max_req_tokens + max_res_tokens
+    seq_len: 2052  # Must be >= max_req_tokens + max_res_tokens AND divisible by TP * 2 * CP = 6
     max_norm: 1.0
     steps: 1000000
     dtype: bfloat16
@@ -66,8 +70,8 @@ trainer:
     enable: false
   parallelism:
     data_parallel_replicate_degree: 1
-    data_parallel_shard_degree: 1
-    tensor_parallel_degree: 1
+    data_parallel_shard_degree: 1    # No data parallel sharding
+    tensor_parallel_degree: 2        # TP across 2 GPUs (each GPU = 1/2 weights)
     pipeline_parallel_degree: 1
     context_parallel_degree: 1
     expert_parallel_degree: 1
@@ -88,7 +92,7 @@ trainer:
 replay_buffer:
   batch_size: ${local_batch_size}
   max_policy_age: ${off_by_n}
-  dp_size: ${trainer.parallelism.data_parallel_shard_degree} # Must equal trainer DP degree
+  dp_size: 1  # Must equal trainer DP degree (no data parallelism, only TP)
 
 # Reference model configuration
 ref_model:
@@ -117,12 +121,12 @@ ref_model:
 # All resource allocations
 services:
   policy:
-    procs: ${policy.engine_args.tensor_parallel_size}
-    num_replicas: 1
+    procs: ${policy.engine_args.tensor_parallel_size}  # 2 GPUs per replica (TP=2)
+    num_replicas: 2  # 2 replicas (total: 2 replicas × 2 GPUs = 4 GPUs)
     mesh_name: policy
     with_gpus: true
   ref_model:
-    procs: 1
+    procs: 1 # markus -- ignore but too lazy to remove.
     num_replicas: 1
     mesh_name: ref_model
     with_gpus: true
@@ -138,7 +142,7 @@ actors:
     with_gpus: false
     mesh_name: dataset
   trainer:
-    procs: 1
+    procs: 2  # 2 GPUs with TP=2 (each GPU holds 1/2 of weights)
     with_gpus: true
     mesh_name: trainer
   replay_buffer:
@@ -149,3 +153,38 @@ actors:
     procs: 1
     with_gpus: false
     mesh_name: compute_advantages
+
+
+# ┌─────────────────────────────────────────────────────────────┐
+# │                     GPU Allocation (8 GPUs)                  │
+# └─────────────────────────────────────────────────────────────┘
+
+# POLICY (4 GPUs - vLLM with TP + Replicas)
+# ┌──────────────────────────┐  ┌──────────────────────────┐
+# │   Replica 0 (2 GPUs)     │  │   Replica 1 (2 GPUs)     │
+# │  ┌────────┬────────┐     │  │  ┌────────┬────────┐     │
+# │  │ GPU 0  │ GPU 1  │     │  │  │ GPU 2  │ GPU 3  │     │
+# │  │  1/2   │  1/2   │     │  │  │  1/2   │  1/2   │     │
+# │  │weights │weights │     │  │  │weights │weights │     │
+# │  └────────┴────────┘     │  │  └────────┴────────┘     │
+# │    (Tensor Parallel)     │  │    (Tensor Parallel)     │
+# └──────────────────────────┘  └──────────────────────────┘
+#        ↓ generates text            ↓ generates text
+#     (Load balanced - both replicas serve requests)
+
+# TRAINER (3 GPUs - TorchTitan with TP)
+# ┌──────────────────────────────────────┐
+# │         Single Replica (3 GPUs)       │
+# │  ┌────────┬────────┬────────┐        │
+# │  │ GPU 4  │ GPU 5  │ GPU 6  │        │
+# │  │  1/3   │  1/3   │  1/3   │        │
+# │  │weights │weights │weights │        │
+# │  └────────┴────────┴────────┘        │
+# │       (Tensor Parallel)               │
+# └──────────────────────────────────────┘
+#        ↓ trains model with gradients
+
+# REF MODEL (1 GPU)
+# ┌──────────┐
+# │  GPU 7   │  (ref_model.with_gpus: true)
+# └──────────┘

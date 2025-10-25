@@ -20,6 +20,7 @@ import torchstore as ts
 from monarch.actor import current_rank, endpoint, ProcMesh, this_host
 
 from vllm.config import VllmConfig
+from torchao.quantization import Int8WeightOnlyConfig
 
 from vllm.engine.arg_utils import EngineArgs
 from vllm.entrypoints.utils import _validate_truncation_size
@@ -49,6 +50,12 @@ from forge.actors._torchstore_utils import (
     get_param_prefix,
     load_tensor_from_dcp,
     rdma_available,
+)
+
+from forge.actors.quantization import (
+    ForgeQuantizationConfig,
+    quantize_loaded_model,
+    create_quantization_config_from_dict,
 )
 
 from forge.controller import (
@@ -589,6 +596,9 @@ class GeneratorWorker(ForgeActor):
     vllm_config: VllmConfig
     # TODO: Remove below param
     _test_prev_params = {}
+    quantization_config: ForgeQuantizationConfig | dict | None = field(
+        default_factory=lambda: ForgeQuantizationConfig(enabled=True, method="int8")
+    )
 
     @endpoint
     async def setup(self):
@@ -612,6 +622,22 @@ class GeneratorWorker(ForgeActor):
         self.worker.init_worker(all_kwargs)
         self.worker.init_device()
         self.worker.load_model()
+
+        # Apply quantization if configured
+        if self.quantization_config is not None:
+            if isinstance(self.quantization_config, dict):
+                quant_config = create_quantization_config_from_dict(
+                    self.quantization_config
+                )
+            else:
+                quant_config = self.quantization_config
+
+            model = self.worker.model_runner.model
+            quantize_loaded_model(model, quant_config)
+            logger.info(
+                f"Model quantization completed for rank {self.rank} using "
+                f"method={quant_config.method}"
+            )
 
     @endpoint
     async def setup_kv_cache(self) -> KVCacheConfig:
